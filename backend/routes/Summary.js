@@ -28,9 +28,10 @@ router.post("/save", async (req, res) => {
       data: newSummary
     });
   } catch (err) {
-    console.log("SAVE ERROR:", err);
+    console.log("SAVE ERROR FULL:", err);
     return res.status(500).json({
-      message: "Save failed"
+      message: "Save failed",
+      error: err.message
     });
   }
 });
