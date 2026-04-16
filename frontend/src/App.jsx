@@ -543,7 +543,7 @@ async function translateTextContent() {
             <section className="text-center mb-8">
               <p className={`text-sm font-semibold mb-3 ${mutedTextClass}`}>Workspace</p>
               <h1 className={theme === "dark" ? "text-4xl md:text-6xl font-bold tracking-tight text-white" : "text-4xl md:text-6xl font-bold tracking-tight text-slate-900"}>
-                React NoteGenius AI
+                 NoteGenius AI
               </h1>
               <p className={`max-w-4xl mx-auto mt-4 text-lg md:text-xl leading-8 ${mutedTextClass}`}>
                 AI-powered workspace for summary, grammar, translation, PDF analysis, and chatbot support.
