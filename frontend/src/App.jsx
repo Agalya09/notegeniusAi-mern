@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 
-const BASE_URL = "https://notegenius-ai-t75e.onrender.com";
+const BASE_URL = "https://notegeniusai-mern-proj.onrender.com"
 
 const tabs = [
   { key: "summary", label: "Summary", icon: "📝" },
@@ -383,41 +383,33 @@ async function translateTextContent() {
       setHistoryItems([]);
     }
   }
+const saveSummary = async () => {
+  try {
+    const user = JSON.parse(localStorage.getItem("user"));
 
-  async function saveSummary() {
-    if (!currentData) {
-      alert("No result available to save.");
+    
+    console.log("USER =", user);
+    console.log("TEXT =", text);
+    console.log("CURRENT DATA =", currentData);
+
+    if (!user) {
+      alert("Please login first");
       return;
     }
 
-    if (!user || (!user._id && !user.id)) {
-      alert("User not found. Please login again.");
-      return;
-    }
+    const res = await axios.post(`${BASE_URL}/api/summary/save`, {
+      userId: user._id || user.id,
+      text: text,
+      summary: currentData?.summary || "",
+      points: currentData?.points || [],
+    });
 
-    let originalText = "";
-    if (activeTab === "summary") originalText = text.trim();
-    else if (activeTab === "grammar") originalText = grammarText.trim();
-    else if (activeTab === "translate") originalText = translateText.trim();
-    else if (activeTab === "pdf") originalText = "[PDF Uploaded Content]";
-    else if (activeTab === "chatbot") originalText = chatbotQuestion.trim();
-
-    try {
-      await axios.post(`${BASE_URL}/api/summary/save`, {
-        userId: user._id || user.id,
-        text: originalText,
-        summary: currentData.summary,
-        points: currentData.points || [],
-      });
-
-      alert("Saved successfully!");
-      if (activeTab === "history") {
-        loadHistory();
-      }
-    } catch (err) {
-      alert("Save failed.");
-    }
+    alert("Saved successfully");
+  } catch (err) {
+    console.log("SAVE ERROR FRONTEND =", err.response?.data || err.message);
+    alert("Save failed");
   }
+};
 
   async function deleteHistoryItem(id) {
     try {
