@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 
-const BASE_URL = "https://notegeniusai-mern-proj.onrender.com"
+const BASE_URL = "https://notegeniusai-mern-proj.onrender.com";
+const BASE_URL = "https://notegeniusai-mern-proj.onrender.com";
 
 const tabs = [
   { key: "summary", label: "Summary", icon: "📝" },
@@ -34,16 +35,86 @@ export default function App() {
   const [pdfFile, setPdfFile] = useState(null);
   const [pdfPreview, setPdfPreview] = useState("");
   const [pdfQuestion, setPdfQuestion] = useState("");
+  
+const [chatbotQuestion, setChatbotQuestion] = useState("");
 
-  const [chatbotQuestion, setChatbotQuestion] = useState("");
+const [historyItems, setHistoryItems] = useState([]);
 
-  const [historyItems, setHistoryItems] = useState([]);
+// 🎤 voice input code INGA podu
+const SpeechRecognition =
+  window.SpeechRecognition || window.webkitSpeechRecognition;
 
-  const [outputTitle, setOutputTitle] = useState("Result");
-  const [outputSubTitle, setOutputSubTitle] = useState("Processed output will appear here.");
-  const [resultTag, setResultTag] = useState("Ready");
-  const [outputHtml, setOutputHtml] = useState("");
-  const [currentData, setCurrentData] = useState(null);
+const startVoiceInput = (setText) => {
+  if (!SpeechRecognition) {
+    alert("Speech not supported");
+    return;
+  }
+
+  const recognition = new SpeechRecognition();
+  recognition.lang = "en-US";
+
+  recognition.onresult = (event) => {
+    const text = event.results[0][0].transcript;
+    setText(text);
+  };
+
+  recognition.start();
+};
+
+
+ const [results, setResults] = useState({
+  summary: {
+    title: "Summary Result",
+    subTitle: "Processed output will appear here.",
+    tag: "Ready",
+    html: "",
+    data: null,
+  },
+  grammar: {
+    title: "Grammar Result",
+    subTitle: "Processed output will appear here.",
+    tag: "Ready",
+    html: "",
+    data: null,
+  },
+  translate: {
+    title: "Translation Result",
+    subTitle: "Processed output will appear here.",
+    tag: "Ready",
+    html: "",
+    data: null,
+  },
+  pdf: {
+    title: "PDF Summary Result",
+    subTitle: "Processed output will appear here.",
+    tag: "Ready",
+    html: "",
+    data: null,
+  },
+  chatbot: {
+    title: "Document Answer",
+    subTitle: "Processed output will appear here.",
+    tag: "Ready",
+    html: "",
+    data: null,
+  },
+  history: {
+    title: "Saved Result",
+    subTitle: "Processed output will appear here.",
+    tag: "Ready",
+    html: "",
+    data: null,
+  },
+});
+
+
+const currentResult = results[activeTab] || {
+  title: "Result",
+  subTitle: "Processed output will appear here.",
+  tag: "Ready",
+  html: "",
+  data: null,
+};
 
   const [loading, setLoading] = useState(false);
 
@@ -94,14 +165,52 @@ export default function App() {
         ? "text-slate-300 hover:bg-slate-800"
         : "text-slate-600 hover:bg-white"
     }`;
-
-  function resetOutput() {
-    setOutputTitle("Result");
-    setOutputSubTitle("Processed output will appear here.");
-    setResultTag("Ready");
-    setOutputHtml("");
-    setCurrentData(null);
-  }
+function resetOutput() {
+  setResults({
+    summary: {
+      title: "Summary Result",
+      subTitle: "Processed output will appear here.",
+      tag: "Ready",
+      html: "",
+      data: null,
+    },
+    grammar: {
+      title: "Grammar Result",
+      subTitle: "Processed output will appear here.",
+      tag: "Ready",
+      html: "",
+      data: null,
+    },
+    translate: {
+      title: "Translation Result",
+      subTitle: "Processed output will appear here.",
+      tag: "Ready",
+      html: "",
+      data: null,
+    },
+    pdf: {
+      title: "PDF Summary Result",
+      subTitle: "Processed output will appear here.",
+      tag: "Ready",
+      html: "",
+      data: null,
+    },
+    chatbot: {
+      title: "Document Answer",
+      subTitle: "Processed output will appear here.",
+      tag: "Ready",
+      html: "",
+      data: null,
+    },
+    history: {
+      title: "Saved Result",
+      subTitle: "Processed output will appear here.",
+      tag: "Ready",
+      html: "",
+      data: null,
+    },
+  });
+}
 
   function resetWorkspace() {
     setText("");
@@ -115,87 +224,99 @@ export default function App() {
     resetOutput();
     setActiveTab("summary");
   }
+function renderSummary(data, label = "Summary") {
+  let html = `
+    <div class="mb-6">
+      <h4 class="text-lg font-semibold mb-2">Summary</h4>
+      <p>${escapeHtml(data.summary || "No summary available")}</p>
+    </div>
+  `;
 
-  function renderSummary(data, label = "Summary") {
-    setOutputTitle(label === "PDF Summary" ? "PDF Summary Result" : "Summary Result");
-    setOutputSubTitle("Generated summary and key points are shown below.");
-    setResultTag(label);
-
-    let html = `
-      <div class="mb-6">
-        <h4 class="text-lg font-semibold mb-2">Summary</h4>
-        <p>${escapeHtml(data.summary || "No summary available")}</p>
-      </div>
-    `;
-
-    if (data.points && data.points.length > 0) {
-      html += `
-        <div>
-          <h4 class="text-lg font-semibold mb-2">Key Points</h4>
-          <ul class="list-disc pl-5 space-y-2">
-            ${data.points.map((point) => `<li>${escapeHtml(point)}</li>`).join("")}
-          </ul>
-        </div>
-      `;
-    }
-
-    setOutputHtml(html);
-    setCurrentData({
-      type: label.toLowerCase(),
-      summary: data.summary || "",
-      points: data.points || [],
-    });
-  }
-
-  function renderGrammar(data) {
-    setOutputTitle("Grammar Result");
-    setOutputSubTitle("Corrected text and suggestions are shown below.");
-    setResultTag("Grammar");
-
-    const html = `
-      <div class="mb-6">
-        <h4 class="text-lg font-semibold mb-2">Corrected Text</h4>
-        <p>${escapeHtml(data.correctedText || "")}</p>
-      </div>
+  if (data.points && data.points.length > 0) {
+    html += `
       <div>
-        <h4 class="text-lg font-semibold mb-2">Suggestions</h4>
-        ${
-          data.suggestions?.length
-            ? `<ul class="list-disc pl-5 space-y-2">
-                ${data.suggestions.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
-              </ul>`
-            : "<p>No grammar suggestions found.</p>"
-        }
+        <h4 class="text-lg font-semibold mb-2">Key Points</h4>
+        <ul class="list-disc pl-5 space-y-2">
+          ${data.points.map((point) => `<li>${escapeHtml(point)}</li>`).join("")}
+        </ul>
       </div>
     `;
-
-    setOutputHtml(html);
-    setCurrentData({
-      type: "grammar",
-      summary: data.correctedText || "",
-      points: data.suggestions || [],
-    });
   }
 
+  const tabKey = label === "PDF Summary" ? "pdf" : "summary";
+
+  setResults((prev) => ({
+    ...prev,
+    [tabKey]: {
+      title: label === "PDF Summary" ? "PDF Summary Result" : "Summary Result",
+      subTitle: "Generated summary and key points are shown below.",
+      tag: label,
+      html,
+      data: {
+        type: label.toLowerCase(),
+        summary: data.summary || "",
+        points: data.points || [],
+      },
+    },
+  }));
+}function renderGrammar(data) {
+  const html = `
+    <div class="mb-6">
+      <h4 class="text-lg font-semibold mb-2">Corrected Text</h4>
+      <p>${escapeHtml(data.correctedText || "")}</p>
+    </div>
+    <div>
+      <h4 class="text-lg font-semibold mb-2">Suggestions</h4>
+      ${
+        data.suggestions?.length
+          ? `<ul class="list-disc pl-5 space-y-2">
+              ${data.suggestions.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+            </ul>`
+          : "<p>No grammar suggestions found.</p>"
+      }
+    </div>
+  `;
+
+  setResults((prev) => ({
+    ...prev,
+    grammar: {
+      title: "Grammar Result",
+      subTitle: "Corrected text and suggestions are shown below.",
+      tag: "Grammar",
+      html,
+      data: {
+        type: "grammar",
+        summary: data.correctedText || "",
+        points: data.suggestions || [],
+      },
+    },
+  }));
+}
   function renderTranslation(data, label) {
-    const translated = data.translatedText || data.output || "Translation unavailable";
+  const translated = data.translatedText || data.output || "Translation unavailable";
 
-    setOutputTitle("Translation Result");
-    setOutputSubTitle("Translated output is shown below.");
-    setResultTag("Translate");
-    setOutputHtml(`
-      <div>
-        <h4 class="text-lg font-semibold mb-2">${escapeHtml(label)} Translation</h4>
-        <p>${escapeHtml(translated)}</p>
-      </div>
-    `);
+  const html = `
+    <div>
+      <h4 class="text-lg font-semibold mb-2">${escapeHtml(label)} Translation</h4>
+      <p>${escapeHtml(translated)}</p>
+    </div>
+  `;
 
-    setCurrentData({
-      type: "translate",
-      summary: translated,
-      points: [],
-    });
-  }
+  setResults((prev) => ({
+    ...prev,
+    translate: {
+      title: "Translation Result",
+      subTitle: "Translated output is shown below.",
+      tag: "Translate",
+      html,
+      data: {
+        type: "translate",
+        summary: translated,
+        points: [],
+      },
+    },
+  }));
+}
 
   async function summarizeText() {
     if (!text.trim()) {
@@ -204,11 +325,17 @@ export default function App() {
     }
 
     setLoading(true);
-    setResultTag("Processing");
-    setOutputTitle("Summary Result");
-    setOutputSubTitle("Generating summary from your input.");
-    setOutputHtml("<p class='text-slate-500'>Generating summary...</p>");
-
+    
+    setResults((prev) => ({
+  ...prev,
+  summary: {
+    ...prev.summary,
+    title: "Summary Result",
+    subTitle: "Generating summary from your input.",
+    tag: "Processing",
+    html: "<p class='text-slate-500'>Generating summary...</p>",
+  },
+}));
     try {
       const res = await axios.post(`${BASE_URL}/summarize`, {
         text,
@@ -223,105 +350,164 @@ export default function App() {
   console.log("SUMMARIZE DATA:", err.response?.data);
   console.log("SUMMARIZE MESSAGE:", err.message);
 
-  setOutputHtml("<p class='text-red-500'>Unable to generate summary.</p>");
+  setResults((prev) => ({
+  ...prev,
+  summary: {
+    ...prev.summary,
+    title: "Summary Result",
+    subTitle: "Error while generating summary.",
+    tag: "Error",
+    html: "<p class='text-red-500'>Unable to generate summary.</p>",
+  },
+}));
   } finally {
       setLoading(false);
     }
   }
-
-  async function checkGrammar() {
-    if (!grammarText.trim()) {
-      alert("Enter text first.");
-      return;
-    }
-
-    setLoading(true);
-    setResultTag("Processing");
-    setOutputTitle("Grammar Result");
-    setOutputSubTitle("Checking grammar suggestions.");
-    setOutputHtml("<p class='text-slate-500'>Checking grammar...</p>");
-
-    try {
-      const res = await axios.post(`${BASE_URL}/grammar-check`, {
-        text: grammarText,
-      });
-
-      renderGrammar(res.data);
-    } catch (err) {
-      setOutputHtml("<p class='text-red-500'>Unable to check grammar.</p>");
-    } finally {
-      setLoading(false);
-    }
+async function checkGrammar() {
+  if (!grammarText.trim()) {
+    alert("Enter text first.");
+    return;
   }
 
+  setLoading(true);
+
+  setResults((prev) => ({
+    ...prev,
+    grammar: {
+      ...prev.grammar,
+      title: "Grammar Result",
+      subTitle: "Checking grammar suggestions.",
+      tag: "Processing",
+      html: "<p class='text-slate-500'>Checking grammar...</p>",
+    },
+  }));
+
+  try {
+    const res = await axios.post(`${BASE_URL}/grammar-check`, {
+      text: grammarText,
+    });
+
+    renderGrammar(res.data);
+  } catch (err) {
+    setResults((prev) => ({
+      ...prev,
+      grammar: {
+        ...prev.grammar,
+        title: "Grammar Result",
+        subTitle: "Error while checking grammar.",
+        tag: "Error",
+        html: "<p class='text-red-500'>Unable to check grammar.</p>",
+      },
+    }));
+  } finally {
+    setLoading(false);
+  }
+}
 async function translateTextContent() {
-    if (!translateText.trim()) {
-      alert("Enter text to translate.");
-      return;
-    }
-
-    setLoading(true);
-    setResultTag("Processing");
-    setOutputTitle("Translation Result");
-    setOutputSubTitle("Translating your text.");
-    setOutputHtml("<p class='text-slate-500'>Translating text...</p>");
-
-    try {
-      const res = await axios.post(`${BASE_URL}/translate`, {
-        text: translateText,
-        target: translateTarget,
-      });
-
-      const label =
-        translateTarget === "ta"
-          ? "Tamil"
-          : translateTarget === "hi"
-          ? "Hindi"
-          : translateTarget === "ml"
-          ? "Malayalam"
-          : translateTarget;
-
-      renderTranslation(res.data, label);
-    } catch (err) {
-      setOutputHtml("<p class='text-red-500'>Translation failed.</p>");
-    } finally {
-      setLoading(false);
-    }
+  if (!translateText.trim()) {
+    alert("Enter text to translate.");
+    return;
   }
 
-  async function translateCurrentSummary() {
-    if (!currentData || !currentData.summary) {
-      alert("No current summary available to translate.");
-      return;
-    }
+  setLoading(true);
 
-    setTranslateText(currentData.summary);
-    setActiveTab("translate");
+  setResults((prev) => ({
+    ...prev,
+    translate: {
+      ...prev.translate,
+      title: "Translation Result",
+      subTitle: "Translating your text.",
+      tag: "Processing",
+      html: "<p class='text-slate-500'>Translating text...</p>",
+      data: null,
+    },
+  }));
+
+  try {
+    const res = await axios.post(`${BASE_URL}/translate`, {
+      text: translateText,
+      target: translateTarget,
+    });
+
+    const label =
+      translateTarget === "ta"
+        ? "Tamil"
+        : translateTarget === "hi"
+        ? "Hindi"
+        : translateTarget === "ml"
+        ? "Malayalam"
+        : translateTarget;
+
+    renderTranslation(res.data, label);
+  } catch (err) {
+    console.log("TRANSLATE ERROR:", err);
+
+    setResults((prev) => ({
+      ...prev,
+      translate: {
+        title: "Translation Result",
+        subTitle: "Translation failed.",
+        tag: "Error",
+        html: "<p class='text-red-500'>Translation failed.</p>",
+        data: null,
+      },
+    }));
+  } finally {
+    setLoading(false);
+  }
+}
+async function translateCurrentSummary() {
+  const summaryData =
+    results.summary?.data || results.pdf?.data;
+
+  if (!summaryData || !summaryData.summary) {
+    alert("No current summary available to translate.");
+    return;
   }
 
-  async function uploadPDF() {
-    if (!pdfFile) {
-      alert("Choose a PDF file.");
-      return;
-    }
+  setTranslateText(summaryData.summary);
+  setActiveTab("translate");
+}
 
-    setLoading(true);
-    setResultTag("Processing");
-    setOutputTitle("PDF Summary Result");
-    setOutputSubTitle("Extracting text and generating summary from the uploaded PDF.");
-    setOutputHtml("<p class='text-slate-500'>Processing PDF...</p>");
+ async function uploadPDF() {
+  if (!pdfFile) {
+    alert("Choose a PDF file.");
+    return;
+  }
 
-    try {
-      const previewUrl = URL.createObjectURL(pdfFile);
-      setPdfPreview(previewUrl);
+  setLoading(true);
 
-      const formData = new FormData();
-      formData.append("file", pdfFile);
+  setResults((prev) => ({
+    ...prev,
+    pdf: {
+      ...prev.pdf,
+      title: "PDF Summary Result",
+      subTitle: "Extracting text and generating summary from the uploaded PDF.",
+      tag: "Processing",
+      html: "<p class='text-slate-500'>Processing PDF...</p>",
+      data: null,
+    },
+  }));
 
-      const res = await axios.post(`${BASE_URL}/upload`, formData, {
+  try {
+    const user = JSON.parse(localStorage.getItem("user"));
+    const token = user?.token;
+
+    const previewUrl = URL.createObjectURL(pdfFile);
+    setPdfPreview(previewUrl);
+
+    const formData = new FormData();
+    formData.append("file", pdfFile);
+
+    const res = await axios.post(
+      `${BASE_URL}/upload`,
+      formData,
+      {
         headers: {
-          "Content-Type": "multipart/form-data",
+          Authorization: `Bearer ${token}`,
         },
+<<<<<<< HEAD
       });
 
       renderSummary(res.data, "PDF Summary");
@@ -408,71 +594,243 @@ const saveSummary = async () => {
   } catch (err) {
     console.log("SAVE ERROR FRONTEND =", err.response?.data || err.message);
     alert("Save failed");
+=======
+      }
+    );
+
+    renderSummary(res.data, "PDF Summary");
+    setTranslateText(res.data.summary || "");
+  } catch (err) {
+    console.log("PDF UPLOAD ERROR:", err.response?.data || err.message);
+
+    setResults((prev) => ({
+      ...prev,
+      pdf: {
+        ...prev.pdf,
+        title: "PDF Summary Result",
+        subTitle: "Error while processing the uploaded PDF.",
+        tag: "Error",
+        html: "<p class='text-red-500'>PDF upload failed.</p>",
+        data: null,
+      },
+    }));
+  } finally {
+    setLoading(false);
+  }
+}
+
+async function askDoc(questionText) {
+  if (!questionText.trim()) {
+    alert("Enter a question.");
+    return;
+>>>>>>> 7bde761 (updated)
   }
 };
 
-  async function deleteHistoryItem(id) {
-    try {
-      await axios.delete(`${BASE_URL}/api/summary/${id}`);
-      loadHistory();
-    } catch (err) {
-      alert("Delete failed.");
-    }
-  }
+  setLoading(true);
 
-  function showSavedItem(item) {
-    setOutputTitle("Saved Result");
-    setOutputSubTitle("Previously saved result is shown below.");
-    setResultTag("Saved");
+  setResults((prev) => ({
+    ...prev,
+    chatbot: {
+      ...prev.chatbot,
+      title: "Document Answer",
+      subTitle: "Finding the best answer from your document...",
+      tag: "Processing",
+      html: "<p class='text-slate-500'>Thinking...</p>",
+      data: null,
+    },
+  }));
 
-    let html = `
-      <div class="mb-6">
-        <h4 class="text-lg font-semibold mb-2">Summary</h4>
-        <p>${escapeHtml(item.summary || "")}</p>
+  try {
+    const user = JSON.parse(localStorage.getItem("user"));
+    const token = user?.token;
+
+    const res = await axios.post(
+      `${BASE_URL}/ask-openai`,
+      { question: questionText },
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
+
+    const answer = res.data.answer || res.data.message || "No answer available.";
+
+    const html = `
+      <div>
+        <h4 class="text-lg font-semibold mb-2">Answer</h4>
+        <p>${escapeHtml(answer)}</p>
       </div>
     `;
 
-    if (item.points && item.points.length > 0) {
-      html += `
-        <div>
-          <h4 class="text-lg font-semibold mb-2">Details</h4>
-          <ul class="list-disc pl-5 space-y-2">
-            ${item.points.map((point) => `<li>${escapeHtml(point)}</li>`).join("")}
-          </ul>
-        </div>
-      `;
-    }
+    setResults((prev) => ({
+      ...prev,
+      chatbot: {
+        title: "Document Answer",
+        subTitle: "Answer generated from your document.",
+        tag: "Chatbot",
+        html,
+        data: {
+          type: "chatbot",
+          summary: answer,
+          points: [],
+        },
+      },
+    }));
+  } catch (err) {
+    console.log("ASK ERROR:", err.response?.data || err.message);
 
-    setOutputHtml(html);
-    setCurrentData({
-      type: "saved",
-      summary: item.summary || "",
-      points: item.points || [],
-    });
+    setResults((prev) => ({
+      ...prev,
+      chatbot: {
+        title: "Document Answer",
+        subTitle: "Error while fetching answer.",
+        tag: "Error",
+        html: "<p class='text-red-500'>Unable to answer right now.</p>",
+        data: null,
+      },
+    }));
+  } finally {
+    setLoading(false);
   }
+}
+  async function loadHistory() {
+  try {
+    const user = JSON.parse(localStorage.getItem("user"));
+    const token = user?.token;
 
-  async function copyOutput() {
-    if (!currentData || !currentData.summary) {
-      alert("No result available to copy.");
+    if (!token) {
+      setHistoryItems([]);
       return;
     }
 
-    let textToCopy = currentData.summary;
+    const res = await axios.get(`${BASE_URL}/api/summary`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
 
-    if (currentData.points && currentData.points.length > 0) {
-      textToCopy += "\n\nDetails:\n";
-      currentData.points.forEach((item, index) => {
-        textToCopy += `${index + 1}. ${item}\n`;
-      });
-    }
-
-    try {
-      await navigator.clipboard.writeText(textToCopy);
-      alert("Copied!");
-    } catch (err) {
-      alert("Copy failed.");
-    }
+    setHistoryItems(Array.isArray(res.data) ? res.data : []);
+  } catch (err) {
+    console.log("HISTORY ERROR:", err.response?.data || err.message);
+    setHistoryItems([]);
   }
+}
+async function saveSummary() {
+  const activeData = currentResult?.data;
+
+  if (!activeData) {
+    alert("No result to save");
+    return;
+  }
+
+  let originalText = text.trim();
+
+  try {
+    const user = JSON.parse(localStorage.getItem("user"));
+    const token = user?.token;
+
+    console.log("TOKEN:", token);
+
+    await axios.post(
+      `${BASE_URL}/api/summary/save`,
+      {
+        text: originalText,
+        summary: activeData.summary,
+        points: activeData.points || [],
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
+
+    alert("Saved successfully!");
+
+  } catch (err) {
+    console.log("SAVE ERROR:", err.response?.data || err.message);
+    alert("Save failed");
+  }
+}
+ async function deleteHistoryItem(id) {
+  try {
+    const user = JSON.parse(localStorage.getItem("user"));
+    const token = user?.token;
+
+    await axios.delete(`${BASE_URL}/api/summary/${id}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    loadHistory();
+  } catch (err) {
+    console.log("DELETE ERROR:", err.response?.data || err.message);
+    alert("Delete failed.");
+  }
+}
+function showSavedItem(item) {
+  let html = `
+    <div class="mb-6">
+      <h4 class="text-lg font-semibold mb-2">Summary</h4>
+      <p>${escapeHtml(item.summary || "")}</p>
+    </div>
+  `;
+
+  if (item.points && item.points.length > 0) {
+    html += `
+      <div>
+        <h4 class="text-lg font-semibold mb-2">Details</h4>
+        <ul class="list-disc pl-5 space-y-2">
+          ${item.points.map((point) => `<li>${escapeHtml(point)}</li>`).join("")}
+        </ul>
+      </div>
+    `;
+  }
+
+  setResults((prev) => ({
+    ...prev,
+    history: {
+      title: "Saved Result",
+      subTitle: "Previously saved result is shown below.",
+      tag: "Saved",
+      html,
+      data: {
+        type: "saved",
+        summary: item.summary || "",
+        points: item.points || [],
+      },
+    },
+  }));
+
+  setActiveTab("history");
+}
+async function copyOutput() {
+  const activeData = currentResult.data;
+
+  if (!activeData || !activeData.summary) {
+    alert("No result available to copy.");
+    return;
+  }
+
+  let textToCopy = activeData.summary;
+
+  if (activeData.points && activeData.points.length > 0) {
+    textToCopy += "\n\nDetails:\n";
+    activeData.points.forEach((item, index) => {
+      textToCopy += `${index + 1}. ${item}\n`;
+    });
+  }
+
+  try {
+    await navigator.clipboard.writeText(textToCopy);
+    alert("Copied!");
+  } catch (err) {
+    alert("Copy failed.");
+  }
+}
 
   function logout() {
   localStorage.clear();
@@ -561,11 +919,19 @@ const saveSummary = async () => {
                     <textarea
                       value={text}
                       onChange={(e) => setText(e.target.value)}
-                      rows={12}
+                       rows={12}
                       placeholder="Enter or paste your text here..."
                       className="w-full rounded-[28px] border border-slate-300 p-5 bg-white text-slate-900"
                     />
 
+                      <button
+                       type="button"
+                       onClick={() => startVoiceInput(setText)}
+                      className="mt-3 bg-emerald-600 text-white px-4 py-2 rounded-xl"
+                      >
+  🎤 Speak
+                    </button>
+                     
                     <button
                       type="button"
                       onClick={summarizeText}
@@ -586,6 +952,13 @@ const saveSummary = async () => {
                       className="w-full rounded-[28px] border border-slate-300 p-5 bg-white text-slate-900"
                     />
                     <button
+                    onClick={() => startVoiceInput(setGrammarText)}
+                    className="mt-3 bg-emerald-600 text-white px-4 py-2 rounded-xl"
+                    >
+  🎤 Speak
+                    </button>
+
+                    <button
                       type="button"
                       onClick={checkGrammar}
                       className="mt-4 rounded-full bg-slate-900 text-white px-6 py-3 font-semibold hover:bg-slate-800 transition"
@@ -604,6 +977,12 @@ const saveSummary = async () => {
                       placeholder="Paste text to translate..."
                       className="w-full rounded-[28px] border border-slate-300 p-5 bg-white text-slate-900"
                     />
+                    <button
+                    onClick={() => startVoiceInput(setTranslateText)}
+                     className="mt-3 bg-emerald-600 text-white px-4 py-2 rounded-xl"
+                    >
+  🎤 Speak
+                    </button>
 
                     <div className="mt-4 flex flex-wrap gap-3">
                       <select
@@ -672,33 +1051,52 @@ const saveSummary = async () => {
                         placeholder="Ask something from the uploaded PDF..."
                         className="w-full rounded-2xl border border-slate-300 px-4 py-3 bg-white text-slate-900"
                       />
-                      <button
-                        type="button"
-                        onClick={() => askDoc(pdfQuestion)}
-                        className="mt-3 rounded-2xl bg-slate-900 text-white px-5 py-3 hover:bg-slate-800 transition"
-                      >
-                        Ask Question
-                      </button>
+                     <button
+  type="button"
+  onClick={() => startVoiceInput(setPdfQuestion)}
+  className="mt-3 bg-emerald-600 text-white px-4 py-2 rounded-xl"
+>
+  🎤 Speak
+</button>
+
+<button
+  type="button"
+  onClick={() => askDoc(pdfQuestion)}
+  className="mt-3 rounded-2xl bg-slate-900 text-white px-5 py-3 hover:bg-slate-800 transition"
+>
+  Ask Question
+</button>
                     </div>
                   </section>
                 )}
 
                 {activeTab === "chatbot" && (
-                  <section>
-                    <input
-                      value={chatbotQuestion}
-                      onChange={(e) => setChatbotQuestion(e.target.value)}
-                      placeholder="Ask a question about your current text or PDF..."
-                      className="w-full rounded-2xl border border-slate-300 px-4 py-3 bg-white text-slate-900"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => askDoc(chatbotQuestion)}
-                      className="mt-4 rounded-2xl bg-slate-900 text-white px-6 py-3 font-semibold hover:bg-slate-800 transition"
-                    >
-                      Ask
-                    </button>
-                  </section>
+                 <section>
+  <input
+    value={chatbotQuestion}
+    onChange={(e) => setChatbotQuestion(e.target.value)}
+    placeholder="Ask a question about your current text or PDF..."
+    className="w-full rounded-2xl border border-slate-300 px-4 py-3 bg-white text-slate-900"
+  />
+
+  {/* 🎤 Voice Button */}
+  <button
+    type="button"
+   onClick={() => startVoiceInput(setChatbotQuestion)}
+    className="mt-3 bg-emerald-600 text-white px-4 py-2 rounded-xl"
+  >
+    🎤 Speak
+  </button>
+
+  {/* Ask Button */}
+  <button
+    type="button"
+    onClick={() => askDoc(chatbotQuestion)}
+    className="mt-4 rounded-2xl bg-slate-900 text-white px-6 py-3 font-semibold"
+  >
+    Ask
+  </button>
+</section>
                 )}
 
                 {activeTab === "history" && (
@@ -737,22 +1135,29 @@ const saveSummary = async () => {
               </div>
 
               <div className={`${cardClass} p-6 sticky top-6 h-fit`}>
-                <div className="flex items-center justify-between gap-3 mb-5">
-                  <div>
-                    <h3 className="text-2xl font-semibold">{outputTitle}</h3>
-                    <p className={`text-sm mt-1 ${mutedTextClass}`}>{outputSubTitle}</p>
-                  </div>
+               <div className="flex items-center justify-between gap-3 mb-5">
+    
+    {/* LEFT SIDE */}
+      <div>
+       <h3 className="text-2xl font-semibold">{currentResult.title}</h3>
 
-                  <span className="text-xs px-3 py-1 rounded-full bg-slate-100 text-slate-700">
-                    {resultTag}
-                  </span>
-                </div>
+      <p className={`text-sm mt-1 ${mutedTextClass}`}>
+        {currentResult.subTitle}
+      </p>
+    </div>
+
+    {/* RIGHT SIDE TAG */}
+    <span className="text-xs px-3 py-1 rounded-full bg-slate-100 text-slate-700">
+      {currentResult.tag}
+    </span>
+
+  </div>
 
                 <div
                   className={outputTextClass}
                   dangerouslySetInnerHTML={{
                     __html:
-                      outputHtml ||
+                      currentResult.html ||
                       `<div class="rounded-[28px] border border-dashed border-slate-200 p-8 text-center text-slate-400">
                         No result yet. Choose a tool and start processing.
                       </div>`,

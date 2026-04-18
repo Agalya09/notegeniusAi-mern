@@ -3,7 +3,6 @@ const Summary = require("../models/Summary");
 
 const router = express.Router();
 
-// Save summary
 router.post("/save", async (req, res) => {
   try {
     console.log("SAVE BODY:", req.body);
@@ -28,7 +27,7 @@ router.post("/save", async (req, res) => {
       data: newSummary
     });
   } catch (err) {
-    console.log("SAVE ERROR FULL:", err);
+    console.log("SAVE ERROR BACKEND:", err);
     return res.status(500).json({
       message: "Save failed",
       error: err.message
