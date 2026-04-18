@@ -361,6 +361,114 @@ function getWordFrequency(text) {
   return freq;
 }
 
+function getTopKeywords(text, limit = 8) {
+  const words = (text || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((word) => word && !stopWords.has(word) && word.length > 2);
+
+  const frequency = {};
+  const firstSeen = {};
+
+  words.forEach((word, index) => {
+    frequency[word] = (frequency[word] || 0) + 1;
+    if (firstSeen[word] === undefined) {
+      firstSeen[word] = index;
+    }
+  });
+
+  return Object.entries(frequency)
+    .sort((a, b) => {
+      if (b[1] !== a[1]) return b[1] - a[1];
+      return firstSeen[a[0]] - firstSeen[b[0]];
+    })
+    .slice(0, limit)
+    .map(([word]) => word);
+}
+
+function compactSentence(sentence, maxWords = 14) {
+  let text = (sentence || "").replace(/\s+/g, " ").trim();
+
+  if (!text) {
+    return "";
+  }
+
+  text = text.replace(/[.?!]+$/, "");
+  text = text.replace(
+    /^(the document|this document|the text|this text|the report|the article|the story|the paper|it|they|he|she|the team|the company|the author)\s+(is|was|are|were|has|have|had|shows|show|highlights|highligts|notes|noted|mentions|mentioned|describes|described|explains|explained|covers|covered|focuses on|focused on|includes|included|states|stated|suggests|suggested)?\s*/i,
+    ""
+  );
+  text = text.replace(
+    /^(\w+(?:\s+\w+){0,2})\s+(joined|led|expanded|improved|launched|introduced|reported|announced|described|said|stated|noted)\s+/i,
+    ""
+  );
+  text = text.replace(/^(into|in|to|for|on|with|from|about)\s+/i, "");
+
+  const words = text.split(" ").filter(Boolean);
+  if (!words.length) {
+    return "";
+  }
+
+  const trimmed = words.slice(0, maxWords).join(" ");
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+}
+
+function dedupeSimilarSentences(sentences) {
+  const seen = new Set();
+  const result = [];
+
+  for (const sentence of sentences) {
+    const normalized = tokenize(sentence).slice(0, 10).join(" ");
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+
+    seen.add(normalized);
+    result.push(sentence);
+  }
+
+  return result;
+}
+
+function buildSynthesizedSummary(text, scored, length = "medium") {
+  const cleanedText = (text || "").trim();
+  const selectedCount = length === "short" ? 2 : length === "long" ? 4 : 3;
+
+  const rankedSentences = dedupeSimilarSentences(
+    [...scored]
+      .sort((a, b) => b.score - a.score)
+      .slice(0, Math.min(selectedCount + 2, scored.length))
+      .sort((a, b) => a.index - b.index)
+      .map((item) => item.sentence)
+  );
+
+  const compactIdeas = rankedSentences
+    .map((sentence) => compactSentence(sentence, 18))
+    .filter(Boolean)
+    .slice(0, selectedCount);
+
+  const intro = "The document highlights the main events, roles, and outcomes.";
+  const body = compactIdeas.length
+    ? `It highlights ${compactIdeas.join("; ")}.`
+    : "It presents the main points in a concise way.";
+
+  return `${intro} ${body}`.replace(/\s+/g, " ").trim();
+}
+
+function buildCompactBulletPoints(text, scored, length = "medium") {
+  const selectedCount = length === "short" ? 3 : length === "long" ? 7 : 5;
+  const compactPoints = dedupeSimilarSentences(
+    [...scored]
+      .sort((a, b) => b.score - a.score)
+      .slice(0, Math.min(selectedCount + 2, scored.length))
+      .sort((a, b) => a.index - b.index)
+      .map((item) => compactSentence(item.sentence, 16))
+  );
+
+  return compactPoints.slice(0, selectedCount);
+}
+
 function scoreSentences(sentences, freq) {
   return sentences.map((sentence, index) => {
     const words = sentence
@@ -393,33 +501,11 @@ function generateSummaryAndPoints(text, length = "medium") {
   const freq = getWordFrequency(cleanText);
   const scored = scoreSentences(sentences, freq);
 
-  let summaryCount = 3;
-  let pointCount = 5;
-
-  if (length === "short") {
-    summaryCount = 2;
-    pointCount = 3;
-  } else if (length === "long") {
-    summaryCount = 5;
-    pointCount = 7;
-  }
-
-  const summarySentences = [...scored]
-    .sort((a, b) => b.score - a.score)
-    .slice(0, Math.min(summaryCount, sentences.length))
-    .sort((a, b) => a.index - b.index)
-    .map((item) => item.sentence);
-
-  const keyPoints = [...scored]
-    .sort((a, b) => b.score - a.score)
-    .slice(0, Math.min(pointCount, sentences.length))
-    .sort((a, b) => a.index - b.index)
-    .map((item) => item.sentence.replace(/[.?!]+$/, "").trim());
+  const summary = buildSynthesizedSummary(cleanText, scored, length);
+  const keyPoints = buildCompactBulletPoints(cleanText, scored, length);
 
   return {
-    summary: summarySentences.length
-      ? summarySentences.join(" ")
-      : sentences.slice(0, 2).join(" "),
+    summary,
     points: [...new Set(keyPoints)],
   };
 }
@@ -443,57 +529,51 @@ app.post("/summarize", async (req, res) => {
     // Keep the latest summarized text as chat context for the same requester.
     setDocumentText(req, text);
 
-    let maxLen = 120;
-    let minLen = 40;
+    const localSummary = generateSummaryAndPoints(text, length);
 
-    if (length === "short") {
-      maxLen = 60;
-      minLen = 20;
-    } else if (length === "long") {
-      maxLen = 200;
-      minLen = 80;
-    }
+    if (process.env.USE_REMOTE_SUMMARY === "true" && process.env.HF_API_KEY) {
+      try {
+        const maxLen = length === "short" ? 60 : length === "long" ? 200 : 120;
+        const minLen = length === "short" ? 20 : length === "long" ? 80 : 40;
 
-    try {
-      const response = await axios.post(
-        "https://api-inference.huggingface.co/models/facebook/bart-large-cnn",
-        {
-          inputs: text,
-          parameters: {
-            max_length: maxLen,
-            min_length: minLen,
-            do_sample: false,
+        const response = await axios.post(
+          "https://api-inference.huggingface.co/models/facebook/bart-large-cnn",
+          {
+            inputs: text,
+            parameters: {
+              max_length: maxLen,
+              min_length: minLen,
+              do_sample: false,
+            },
           },
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${process.env.HF_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-          timeout: 30000,
+          {
+            headers: {
+              Authorization: `Bearer ${process.env.HF_API_KEY}`,
+              "Content-Type": "application/json",
+            },
+            timeout: 30000,
+          }
+        );
+
+        console.log("HF RESPONSE:", response.data);
+
+        const summary =
+          Array.isArray(response.data)
+            ? response.data[0]?.summary_text
+            : response.data?.summary_text;
+
+        if (summary && summary.trim()) {
+          return res.json({
+            summary,
+            points: localSummary.points,
+          });
         }
-      );
-
-      console.log("HF RESPONSE:", response.data);
-
-      const summary =
-        Array.isArray(response.data)
-          ? response.data[0]?.summary_text
-          : response.data?.summary_text;
-
-      if (summary && summary.trim()) {
-        return res.json({
-          summary,
-          points: generateSummaryAndPoints(text, length).points,
-        });
+      } catch (hfErr) {
+        console.log("HF ERROR:", hfErr.response?.data || hfErr.message);
       }
-    } catch (hfErr) {
-      console.log("HF ERROR:", hfErr.response?.data || hfErr.message);
     }
 
-    // fallback summary if HF fails
-    const fallback = generateSummaryAndPoints(text, length);
-    return res.json(fallback);
+    return res.json(localSummary);
 
   } catch (err) {
     console.log("FINAL SUMMARY ERROR:", err.message);
