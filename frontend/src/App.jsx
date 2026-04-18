@@ -1,7 +1,6 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import axios from "axios";
 
-const BASE_URL = "https://notegeniusai-mern-proj.onrender.com";
 const BASE_URL = "https://notegeniusai-mern-proj.onrender.com";
 
 const tabs = [
@@ -61,6 +60,11 @@ const startVoiceInput = (setText) => {
   recognition.start();
 };
 
+function getAuthToken() {
+  const userData = JSON.parse(localStorage.getItem("user") || "null");
+  return localStorage.getItem("token") || userData?.token || "";
+}
+
 
  const [results, setResults] = useState({
   summary: {
@@ -118,23 +122,37 @@ const currentResult = results[activeTab] || {
 
   const [loading, setLoading] = useState(false);
 
-  const user = useMemo(() => {
-    try {
-      return JSON.parse(localStorage.getItem("user"));
-    } catch {
-      return null;
-    }
-  }, []);
-
   useEffect(() => {
     localStorage.setItem("theme", theme);
   }, [theme]);
+
+  const loadHistory = useCallback(async () => {
+    try {
+      const token = getAuthToken();
+
+      if (!token) {
+        setHistoryItems([]);
+        return;
+      }
+
+      const res = await axios.get(`${BASE_URL}/api/summary`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      setHistoryItems(Array.isArray(res.data) ? res.data : []);
+    } catch (err) {
+      console.log("HISTORY ERROR:", err.response?.data || err.message);
+      setHistoryItems([]);
+    }
+  }, []);
 
   useEffect(() => {
     if (activeTab === "history") {
       loadHistory();
     }
-  }, [activeTab]);
+  }, [activeTab, loadHistory]);
 
   const bodyClass =
     theme === "dark"
@@ -389,7 +407,7 @@ async function checkGrammar() {
     });
 
     renderGrammar(res.data);
-  } catch (err) {
+  } catch {
     setResults((prev) => ({
       ...prev,
       grammar: {
@@ -491,8 +509,23 @@ async function translateCurrentSummary() {
   }));
 
   try {
-    const user = JSON.parse(localStorage.getItem("user"));
-    const token = user?.token;
+    const token = getAuthToken();
+
+    if (!token) {
+      setResults((prev) => ({
+        ...prev,
+        pdf: {
+          ...prev.pdf,
+          title: "PDF Summary Result",
+          subTitle: "You need to login again to upload and chat with PDF.",
+          tag: "Auth Required",
+          html: "<p class='text-red-500'>Session expired. Please login again.</p>",
+          data: null,
+        },
+      }));
+      setLoading(false);
+      return;
+    }
 
     const previewUrl = URL.createObjectURL(pdfFile);
     setPdfPreview(previewUrl);
@@ -507,125 +540,35 @@ async function translateCurrentSummary() {
         headers: {
           Authorization: `Bearer ${token}`,
         },
-<<<<<<< HEAD
+
       });
 
       renderSummary(res.data, "PDF Summary");
       setTranslateText(res.data.summary || "");
-    } catch (err) {
-      setOutputHtml("<p class='text-red-500'>PDF upload failed.</p>");
+      } catch (err) {
+        console.log("PDF UPLOAD ERROR:", err.response?.data || err.message);
+
+        setResults((prev) => ({
+          ...prev,
+          pdf: {
+            ...prev.pdf,
+            title: "PDF Summary Result",
+            subTitle: "Error while processing the uploaded PDF.",
+            tag: "Error",
+            html: "<p class='text-red-500'>PDF upload failed.</p>",
+            data: null,
+          },
+        }));
     } finally {
       setLoading(false);
     }
   }
-
-  async function askDoc(questionText) {
-    if (!questionText.trim()) {
-      alert("Enter a question.");
-      return;
-    }
-
-    setLoading(true);
-    setResultTag("Processing");
-    setOutputTitle("Document Answer");
-    setOutputSubTitle("Checking your document for the best possible answer.");
-    setOutputHtml("<p class='text-slate-500'>Finding answer...</p>");
-
-    try {
-      const res = await axios.post(`${BASE_URL}/ask-doc`, {
-        question: questionText,
-      });
-
-      setOutputHtml(`
-        <div>
-          <h4 class="text-lg font-semibold mb-2">Answer</h4>
-          <p>${escapeHtml(res.data.answer || res.data.message || "No answer available.")}</p>
-        </div>
-      `);
-
-      setCurrentData({
-        type: "chatbot",
-        summary: res.data.answer || res.data.message || "",
-        points: [],
-      });
-      setResultTag("Chatbot");
-    } catch (err) {
-      setOutputHtml("<p class='text-red-500'>Unable to answer right now.</p>");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function loadHistory() {
-    if (!user || (!user._id && !user.id)) {
-      setHistoryItems([]);
-      return;
-    }
-
-    try {
-      const res = await axios.get(`${BASE_URL}/api/summary/${user._id || user.id}`);
-      setHistoryItems(Array.isArray(res.data) ? res.data : []);
-    } catch (err) {
-      setHistoryItems([]);
-    }
-  }
-const saveSummary = async () => {
-  try {
-    const user = JSON.parse(localStorage.getItem("user"));
-
-    
-    console.log("USER =", user);
-    console.log("TEXT =", text);
-    console.log("CURRENT DATA =", currentData);
-
-    if (!user) {
-      alert("Please login first");
-      return;
-    }
-
-    const res = await axios.post(`${BASE_URL}/api/summary/save`, {
-      userId: user._id || user.id,
-      text: text,
-      summary: currentData?.summary || "",
-      points: currentData?.points || [],
-    });
-
-    alert("Saved successfully");
-  } catch (err) {
-    console.log("SAVE ERROR FRONTEND =", err.response?.data || err.message);
-    alert("Save failed");
-=======
-      }
-    );
-
-    renderSummary(res.data, "PDF Summary");
-    setTranslateText(res.data.summary || "");
-  } catch (err) {
-    console.log("PDF UPLOAD ERROR:", err.response?.data || err.message);
-
-    setResults((prev) => ({
-      ...prev,
-      pdf: {
-        ...prev.pdf,
-        title: "PDF Summary Result",
-        subTitle: "Error while processing the uploaded PDF.",
-        tag: "Error",
-        html: "<p class='text-red-500'>PDF upload failed.</p>",
-        data: null,
-      },
-    }));
-  } finally {
-    setLoading(false);
-  }
-}
 
 async function askDoc(questionText) {
   if (!questionText.trim()) {
     alert("Enter a question.");
     return;
->>>>>>> 7bde761 (updated)
   }
-};
 
   setLoading(true);
 
@@ -642,8 +585,22 @@ async function askDoc(questionText) {
   }));
 
   try {
-    const user = JSON.parse(localStorage.getItem("user"));
-    const token = user?.token;
+    const token = getAuthToken();
+
+    if (!token) {
+      setResults((prev) => ({
+        ...prev,
+        chatbot: {
+          title: "Document Answer",
+          subTitle: "Authentication required.",
+          tag: "Auth Required",
+          html: "<p class='text-red-500'>Session expired. Please login again.</p>",
+          data: null,
+        },
+      }));
+      setLoading(false);
+      return;
+    }
 
     const res = await axios.post(
       `${BASE_URL}/ask-openai`,
@@ -656,11 +613,27 @@ async function askDoc(questionText) {
     );
 
     const answer = res.data.answer || res.data.message || "No answer available.";
+    const confidence = res.data.confidence || "unknown";
+    const sources = Array.isArray(res.data.sources) ? res.data.sources : [];
+    const sourcesHtml = sources.length
+      ? `
+        <div class="mt-5">
+          <h5 class="text-sm font-semibold mb-2">Sources</h5>
+          <ul class="list-disc pl-5 space-y-2 text-sm">
+            ${sources
+              .map((src) => `<li>${escapeHtml(src.excerpt || "")}</li>`)
+              .join("")}
+          </ul>
+        </div>
+      `
+      : "";
 
     const html = `
       <div>
         <h4 class="text-lg font-semibold mb-2">Answer</h4>
         <p>${escapeHtml(answer)}</p>
+        <p class="mt-3 text-xs uppercase tracking-wide text-slate-500">Confidence: ${escapeHtml(confidence)}</p>
+        ${sourcesHtml}
       </div>
     `;
 
@@ -680,6 +653,7 @@ async function askDoc(questionText) {
     }));
   } catch (err) {
     console.log("ASK ERROR:", err.response?.data || err.message);
+    const serverMessage = err.response?.data?.message || "Unable to answer right now.";
 
     setResults((prev) => ({
       ...prev,
@@ -687,7 +661,7 @@ async function askDoc(questionText) {
         title: "Document Answer",
         subTitle: "Error while fetching answer.",
         tag: "Error",
-        html: "<p class='text-red-500'>Unable to answer right now.</p>",
+        html: `<p class='text-red-500'>${escapeHtml(serverMessage)}</p>`,
         data: null,
       },
     }));
@@ -695,28 +669,7 @@ async function askDoc(questionText) {
     setLoading(false);
   }
 }
-  async function loadHistory() {
-  try {
-    const user = JSON.parse(localStorage.getItem("user"));
-    const token = user?.token;
 
-    if (!token) {
-      setHistoryItems([]);
-      return;
-    }
-
-    const res = await axios.get(`${BASE_URL}/api/summary`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
-
-    setHistoryItems(Array.isArray(res.data) ? res.data : []);
-  } catch (err) {
-    console.log("HISTORY ERROR:", err.response?.data || err.message);
-    setHistoryItems([]);
-  }
-}
 async function saveSummary() {
   const activeData = currentResult?.data;
 
@@ -725,13 +678,15 @@ async function saveSummary() {
     return;
   }
 
-  let originalText = text.trim();
+  const originalText = text.trim();
 
   try {
-    const user = JSON.parse(localStorage.getItem("user"));
-    const token = user?.token;
+    const token = getAuthToken();
 
-    console.log("TOKEN:", token);
+    if (!token) {
+      alert("Session expired. Please login again.");
+      return;
+    }
 
     await axios.post(
       `${BASE_URL}/api/summary/save`,
@@ -748,7 +703,6 @@ async function saveSummary() {
     );
 
     alert("Saved successfully!");
-
   } catch (err) {
     console.log("SAVE ERROR:", err.response?.data || err.message);
     alert("Save failed");
@@ -756,8 +710,12 @@ async function saveSummary() {
 }
  async function deleteHistoryItem(id) {
   try {
-    const user = JSON.parse(localStorage.getItem("user"));
-    const token = user?.token;
+    const token = getAuthToken();
+
+    if (!token) {
+      alert("Session expired. Please login again.");
+      return;
+    }
 
     await axios.delete(`${BASE_URL}/api/summary/${id}`, {
       headers: {
@@ -827,7 +785,7 @@ async function copyOutput() {
   try {
     await navigator.clipboard.writeText(textToCopy);
     alert("Copied!");
-  } catch (err) {
+  } catch {
     alert("Copy failed.");
   }
 }

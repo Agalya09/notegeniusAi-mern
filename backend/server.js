@@ -6,6 +6,7 @@ const multer = require("multer");
 const pdfParse = require("pdf-parse");
 const fs = require("fs");
 const path = require("path");
+const jwt = require("jsonwebtoken");
 require("dotenv").config();
 
 const authRoutes = require("./routes/auth");
@@ -45,7 +46,8 @@ app.use("/api/auth", authRoutes);
 app.use("/api/summary", summaryRoutes);
 
 // -------------------- IN-MEMORY DOC CONTEXT --------------------
-let latestDocumentText = "";
+const latestDocumentByContext = new Map();
+const chatHistoryByContext = new Map();
 
 // -------------------- NLP HELPERS --------------------
 const stopWords = new Set([
@@ -55,6 +57,286 @@ const stopWords = new Set([
   "but", "not", "which", "who", "what", "when", "where", "why", "how", "you", "your",
   "we", "our", "they", "he", "she", "his", "her", "its", "i", "am", "been", "being",
 ]);
+
+function getContextKey(req) {
+  const authHeader = req.headers.authorization || "";
+  if (authHeader.startsWith("Bearer ")) {
+    const token = authHeader.slice(7).trim();
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      if (decoded?.id) {
+        return `user:${decoded.id}`;
+      }
+    } catch {
+      // fallback to guest key
+    }
+  }
+
+  return "guest";
+}
+
+function setDocumentText(req, text) {
+  const key = getContextKey(req);
+  latestDocumentByContext.set(key, text);
+  chatHistoryByContext.set(key, []);
+}
+
+function getDocumentText(req) {
+  return latestDocumentByContext.get(getContextKey(req)) || "";
+}
+
+function getHistory(req) {
+  return chatHistoryByContext.get(getContextKey(req)) || [];
+}
+
+function pushHistory(req, question, answer) {
+  const key = getContextKey(req);
+  const history = chatHistoryByContext.get(key) || [];
+  history.push({ question, answer });
+  chatHistoryByContext.set(key, history.slice(-6));
+}
+
+function tokenize(text) {
+  return (text || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((word) => word && !stopWords.has(word) && word.length > 2);
+}
+
+function splitIntoChunks(text, maxChunkLength = 900) {
+  const sentences = splitSentences(text);
+  if (sentences.length === 0) {
+    return [];
+  }
+
+  const chunks = [];
+  let current = "";
+
+  for (const sentence of sentences) {
+    if ((current + " " + sentence).trim().length > maxChunkLength) {
+      if (current.trim()) {
+        chunks.push(current.trim());
+      }
+      current = sentence;
+    } else {
+      current = `${current} ${sentence}`.trim();
+    }
+  }
+
+  if (current.trim()) {
+    chunks.push(current.trim());
+  }
+
+  return chunks;
+}
+
+function getTopRelevantChunks(question, text, topK = 4) {
+  const questionTokens = tokenize(question);
+  const questionTokenSet = new Set(questionTokens);
+  const questionLower = (question || "").toLowerCase();
+  const chunks = splitIntoChunks(text, 900);
+
+  if (chunks.length === 0) {
+    return [];
+  }
+
+  const scored = chunks
+    .map((chunk, idx) => {
+      const tokens = tokenize(chunk);
+      const uniqueTokens = new Set(tokens);
+
+      let exactOverlap = 0;
+      let partialOverlap = 0;
+      for (const token of uniqueTokens) {
+        if (questionTokenSet.has(token)) {
+          exactOverlap += 1;
+          continue;
+        }
+
+        for (const qToken of questionTokenSet) {
+          if (
+            qToken.length >= 4 &&
+            (token.includes(qToken) || qToken.includes(token))
+          ) {
+            partialOverlap += 1;
+            break;
+          }
+        }
+      }
+
+      const phraseBoost = questionLower && chunk.toLowerCase().includes(questionLower) ? 2 : 0;
+      const density = tokens.length ? (exactOverlap + partialOverlap) / tokens.length : 0;
+      const score = exactOverlap * 3 + partialOverlap + phraseBoost + density;
+      return {
+        id: idx + 1,
+        chunk,
+        score,
+        overlap: exactOverlap + partialOverlap,
+      };
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topK)
+    .filter((item) => item.score > 0 || questionTokens.length === 0);
+
+  return scored;
+}
+
+function isGreeting(question) {
+  return /^(hi|hello|hey|good\s(morning|afternoon|evening))\b/i.test(question.trim());
+}
+
+function buildPrompt(question, selectedChunks, history) {
+  const context = selectedChunks
+    .map((item, idx) => `[Chunk ${idx + 1}] ${item.chunk}`)
+    .join("\n\n");
+
+  const historyText = history
+    .slice(-3)
+    .map((item, idx) => `Turn ${idx + 1} Q: ${item.question}\nTurn ${idx + 1} A: ${item.answer}`)
+    .join("\n\n");
+
+  return `You are a precise document assistant.
+Rules:
+- Answer ONLY from the provided context chunks.
+- If the answer is not present, say exactly: "The answer is not available in the document."
+- Keep the answer concise and factual.
+- Do not invent facts.
+
+Conversation history:
+${historyText || "(none)"}
+
+Context chunks:
+${context}
+
+Question:
+${question}
+
+Answer:`;
+}
+
+function buildFallbackAnswer(selectedChunks) {
+  if (!selectedChunks.length) {
+    return "The answer is not available in the document.";
+  }
+
+  const topSentences = selectedChunks
+    .map((item) => splitSentences(item.chunk)[0])
+    .filter(Boolean)
+    .slice(0, 2);
+
+  if (!topSentences.length) {
+    return "The answer is not available in the document.";
+  }
+
+  return topSentences.join(" ");
+}
+
+function buildExtractiveAnswer(question, selectedChunks) {
+  const questionTokens = tokenize(question);
+  const tokenSet = new Set(questionTokens);
+
+  const candidateSentences = selectedChunks
+    .flatMap((item) => splitSentences(item.chunk))
+    .filter(Boolean)
+    .map((sentence, idx) => {
+      const tokens = tokenize(sentence);
+      let score = 0;
+
+      for (const token of tokens) {
+        if (tokenSet.has(token)) {
+          score += 2;
+        } else {
+          for (const qToken of tokenSet) {
+            if (qToken.length >= 4 && (token.includes(qToken) || qToken.includes(token))) {
+              score += 1;
+              break;
+            }
+          }
+        }
+      }
+
+      return { sentence, score, idx };
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 2)
+    .map((item) => item.sentence);
+
+  if (!candidateSentences.length || candidateSentences.every((s) => !s.trim())) {
+    return buildFallbackAnswer(selectedChunks);
+  }
+
+  return candidateSentences.join(" ");
+}
+
+async function answerDocumentQuestion(question, documentText, history) {
+  const selectedChunks = getTopRelevantChunks(question, documentText, 4);
+  const topScore = selectedChunks[0]?.score || 0;
+  const confidence = topScore >= 4 ? "high" : topScore >= 2 ? "medium" : "low";
+
+  if (!selectedChunks.length || topScore < 1) {
+    return {
+      answer: "The answer is not available in the document.",
+      sources: [],
+      confidence: "low",
+    };
+  }
+
+  const prompt = buildPrompt(question, selectedChunks, history);
+
+  try {
+    const response = await axios.post(
+      "https://router.huggingface.co/hf-inference/models/google/flan-t5-large",
+      {
+        inputs: prompt,
+        parameters: {
+          max_new_tokens: 180,
+          temperature: 0.2,
+          do_sample: false,
+        },
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.HF_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        timeout: 30000,
+      }
+    );
+
+    const modelAnswer = (
+      response.data?.generated_text ||
+      response.data?.[0]?.generated_text ||
+      ""
+    ).trim();
+
+    const extractiveAnswer = buildExtractiveAnswer(question, selectedChunks);
+    const answer =
+      modelAnswer && modelAnswer !== "The answer is not available in the document."
+        ? modelAnswer
+        : extractiveAnswer;
+
+    return {
+      answer: answer || extractiveAnswer || buildFallbackAnswer(selectedChunks),
+      sources: selectedChunks.map((item, idx) => ({
+        id: idx + 1,
+        excerpt: item.chunk.slice(0, 220),
+      })),
+      confidence,
+    };
+  } catch (hfErr) {
+    console.log("HF CHAT ERROR:", hfErr.response?.data || hfErr.message);
+    const extractiveAnswer = buildExtractiveAnswer(question, selectedChunks);
+    return {
+      answer: extractiveAnswer || buildFallbackAnswer(selectedChunks),
+      sources: selectedChunks.map((item, idx) => ({
+        id: idx + 1,
+        excerpt: item.chunk.slice(0, 220),
+      })),
+      confidence,
+    };
+  }
+}
 
 function splitSentences(text) {
   return (text || "")
@@ -158,6 +440,9 @@ app.post("/summarize", async (req, res) => {
       });
     }
 
+    // Keep the latest summarized text as chat context for the same requester.
+    setDocumentText(req, text);
+
     let maxLen = 120;
     let minLen = 40;
 
@@ -221,10 +506,12 @@ app.post("/summarize", async (req, res) => {
   }
 });
 // -------------------- HUGGING FACE DOC CHAT --------------------
-app.post("/ask-openai", async (req, res) => {
+async function handleAskDocument(req, res) {
   console.log("CHAT HIT");
   try {
     const question = (req.body.question || "").trim();
+    const latestDocumentText = getDocumentText(req);
+    const history = getHistory(req);
 
     console.log("CHAT BODY:", req.body);
     console.log("HAS HF KEY:", !!process.env.HF_API_KEY);
@@ -237,87 +524,23 @@ app.post("/ask-openai", async (req, res) => {
       });
     }
 
+    if (isGreeting(question) && !latestDocumentText) {
+      return res.json({
+        answer: "Hello! Upload a PDF first, then ask me anything from that document.",
+        sources: [],
+        confidence: "high",
+      });
+    }
+
     if (!latestDocumentText) {
       return res.status(400).json({
         answer: "",
         message: "No document available. First summarize text or upload a PDF.",
       });
     }
-
-    const prompt = `
-Answer only from the document below.
-If the answer is not in the document, say:
-"The answer is not available in the document."
-
-Document:
-${latestDocumentText}
-
-Question:
-${question}
-`;
-
-    try {
-      const response = await axios.post(
-        "https://router.huggingface.co/hf-inference/models/google/flan-t5-large",
-        {
-          inputs: prompt,
-          parameters: {
-            max_new_tokens: 120,
-          },
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${process.env.HF_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-          timeout: 30000,
-        }
-      );
-
-      console.log("HF CHAT RAW:", response.data);
-
-      const answer =
-        response.data?.generated_text ||
-        response.data?.[0]?.generated_text ||
-        "";
-
-      if (answer) {
-        return res.json({ answer });
-      }
-    } catch (hfErr) {
-      console.log("HF CHAT ERROR:", hfErr.response?.data || hfErr.message);
-    }
-
-    const questionWords = question
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, " ")
-      .split(/\s+/)
-      .filter((w) => w && !stopWords.has(w));
-
-    const sentences = splitSentences(latestDocumentText);
-
-    let bestSentence = "";
-    let bestScore = -1;
-
-    for (const sentence of sentences) {
-      const cleanSentence = sentence.toLowerCase();
-      let score = 0;
-
-      for (const word of questionWords) {
-        if (cleanSentence.includes(word)) {
-          score += 1;
-        }
-      }
-
-      if (score > bestScore) {
-        bestScore = score;
-        bestSentence = sentence;
-      }
-    }
-
-    return res.json({
-      answer: bestSentence || "The answer is not available in the document.",
-    });
+    const result = await answerDocumentQuestion(question, latestDocumentText, history);
+    pushHistory(req, question, result.answer);
+    return res.json(result);
   } catch (err) {
     console.log("ASK ERROR:", err.message);
     return res.status(500).json({
@@ -325,7 +548,9 @@ ${question}
       message: "Chatbot failed",
     });
   }
-});
+}
+
+app.post("/ask-openai", handleAskDocument);
 
 // -------------------- GRAMMAR CHECK --------------------
 app.post("/grammar-check", async (req, res) => {
@@ -472,7 +697,7 @@ app.post("/upload", upload.single("file"), async (req, res) => {
       });
     }
 
-    latestDocumentText = text;
+    setDocumentText(req, text);
 
     const result = generateSummaryAndPoints(text, "medium");
 
@@ -490,62 +715,7 @@ app.post("/upload", upload.single("file"), async (req, res) => {
 });
 
 // -------------------- BASIC DOC QA FALLBACK --------------------
-app.post("/ask-doc", (req, res) => {
-  try {
-    const question = (req.body.question || "").trim();
-
-    if (!question) {
-      return res.status(400).json({
-        answer: "",
-        message: "No question provided",
-      });
-    }
-
-    if (!latestDocumentText) {
-      return res.status(400).json({
-        answer: "",
-        message: "No document available. First summarize text or upload a PDF.",
-      });
-    }
-
-    const questionWords = question
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, " ")
-      .split(/\s+/)
-      .filter((w) => w && !stopWords.has(w));
-
-    const sentences = splitSentences(latestDocumentText);
-
-    let bestSentence = "";
-    let bestScore = -1;
-
-    for (const sentence of sentences) {
-      const cleanSentence = sentence.toLowerCase();
-      let score = 0;
-
-      for (const word of questionWords) {
-        if (cleanSentence.includes(word)) {
-          score += 1;
-        }
-      }
-
-      if (score > bestScore) {
-        bestScore = score;
-        bestSentence = sentence;
-      }
-    }
-
-    return res.json({
-      answer: bestSentence || "I could not find a clear answer in the current document.",
-    });
-  } catch (err) {
-    console.log("ASK DOC ERROR:", err.message);
-    return res.status(500).json({
-      answer: "",
-      message: "Chatbot failed",
-    });
-  }
-});
+app.post("/ask-doc", handleAskDocument);
 
 // -------------------- TEST --------------------
 app.get("/test", (req, res) => {
